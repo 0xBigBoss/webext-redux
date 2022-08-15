@@ -1,18 +1,19 @@
-import assignIn from 'lodash.assignin';
+import logger from "@sendnodes/pokt-wallet-background/lib/logger"
+import assignIn from "lodash.assignin"
 
 import {
   DISPATCH_TYPE,
   STATE_TYPE,
   PATCH_STATE_TYPE,
-  DEFAULT_PORT_NAME
-} from '../constants';
-import { withSerializer, withDeserializer, noop } from "../serialization";
-import shallowDiff from '../strategies/shallowDiff/patch';
-import { getBrowserAPI } from '../util';
+  DEFAULT_PORT_NAME,
+} from "../constants"
+import { withSerializer, withDeserializer, noop } from "../serialization"
+import shallowDiff from "../strategies/shallowDiff/patch"
+import { getBrowserAPI } from "../util"
 
-const backgroundErrPrefix = '\nLooks like there is an error in the background page. ' +
-  'You might want to inspect your background page for more details.\n';
-
+const backgroundErrPrefix =
+  "\nLooks like there is an error in the background page. " +
+  "You might want to inspect your background page for more details.\n"
 
 const defaultOpts = {
   portName: DEFAULT_PORT_NAME,
@@ -21,52 +22,64 @@ const defaultOpts = {
   serializer: noop,
   deserializer: noop,
   patchStrategy: shallowDiff,
-  maxReconnects: 10
-};
+  maxReconnects: 10,
+}
 
 class Store {
   /**
    * Creates a new Proxy store
    * @param  {object} options An object of form {portName, state, extensionId, serializer, deserializer, diffStrategy}, where `portName` is a required string and defines the name of the port for state transition changes, `state` is the initial state of this store (default `{}`) `extensionId` is the extension id as defined by browserAPI when extension is loaded (default `''`), `serializer` is a function to serialize outgoing message payloads (default is passthrough), `deserializer` is a function to deserialize incoming message payloads (default is passthrough), and patchStrategy is one of the included patching strategies (default is shallow diff) or a custom patching function.
    */
-  constructor({ portName = defaultOpts.portName, state = defaultOpts.state, extensionId = defaultOpts.extensionId, serializer = defaultOpts.serializer, deserializer = defaultOpts.deserializer, patchStrategy = defaultOpts.patchStrategy, maxReconnects = defaultOpts.maxReconnects } = defaultOpts) {
+  constructor({
+    portName = defaultOpts.portName,
+    state = defaultOpts.state,
+    extensionId = defaultOpts.extensionId,
+    serializer = defaultOpts.serializer,
+    deserializer = defaultOpts.deserializer,
+    patchStrategy = defaultOpts.patchStrategy,
+    maxReconnects = defaultOpts.maxReconnects,
+  } = defaultOpts) {
     if (!portName) {
-      throw new Error('portName is required in options');
+      throw new Error("portName is required in options")
     }
-    if (typeof serializer !== 'function') {
-      throw new Error('serializer must be a function');
+    if (typeof serializer !== "function") {
+      throw new Error("serializer must be a function")
     }
-    if (typeof deserializer !== 'function') {
-      throw new Error('deserializer must be a function');
+    if (typeof deserializer !== "function") {
+      throw new Error("deserializer must be a function")
     }
-    if (typeof patchStrategy !== 'function') {
-      throw new Error('patchStrategy must be one of the included patching strategies or a custom patching function');
+    if (typeof patchStrategy !== "function") {
+      throw new Error(
+        "patchStrategy must be one of the included patching strategies or a custom patching function"
+      )
     }
 
-    this.maxReconnects = maxReconnects;
-    this.portName = portName;
-    this.readyResolved = false;
-    this.readyPromise = new Promise(resolve => {
-      this.readyResolve = resolve;
-    });
+    this.maxReconnects = maxReconnects
+    this.portName = portName
+    this.readyResolved = false
+    this.readyPromise = new Promise((resolve) => {
+      this.readyResolve = resolve
+    })
 
-    this.browserAPI = getBrowserAPI();
-    this.extensionId = extensionId; // keep the extensionId as an instance variable
+    this.browserAPI = getBrowserAPI()
+    this.extensionId = extensionId // keep the extensionId as an instance variable
     this.serializedMessageSender = withSerializer(serializer)((...args) => {
-      this.browserAPI.runtime.sendMessage(...args);
-    }, 1);
-    this.listeners = [];
-    this.state = state;
-    this.patchStrategy = patchStrategy;
+      this.browserAPI.runtime.sendMessage(...args)
+    }, 1)
+    this.listeners = []
+    this.state = state
+    this.patchStrategy = patchStrategy
 
-    this.safetyHandler = this.safetyHandler.bind(this);
+    this.safetyHandler = this.safetyHandler.bind(this)
     if (this.browserAPI.runtime.onMessage) {
-      this.safetyMessage = this.browserAPI.runtime.onMessage.addListener(this.safetyHandler);
+      this.safetyMessage = this.browserAPI.runtime.onMessage.addListener(
+        this.safetyHandler
+      )
     }
-    this.dispatch = this.dispatch.bind(this); // add this context to dispatch
+    this.dispatch = this.dispatch.bind(this) // add this context to dispatch
 
     // finally connect
-    this.connect(deserializer);
+    this.connect(deserializer)
   }
 
   /**
@@ -75,52 +88,55 @@ class Store {
    */
   connect(deserializer, attempts = 0) {
     if (attempts > this.maxReconnects) {
-      throw new Error("Too many connection attempts");
+      throw new Error("Too many connection attempts")
     }
     // wake up service worker and then connect
-    this.port = this.browserAPI.runtime.connect(this.extensionId, { name: this.portName });
+    this.port = this.browserAPI.runtime.connect(this.extensionId, {
+      name: this.portName,
+    })
 
     this.port.onDisconnect.addListener(() => {
-      setTimeout(() => this.connect(deserializer, ++attempts), 0);
-    });
+      setTimeout(() => this.connect(deserializer, ++attempts), 0)
+    })
 
     this.serializedPortListener = withDeserializer(deserializer)((...args) => {
-      this.port.onMessage.addListener(...args);
-    });
+      this.port.onMessage.addListener(...args)
+    })
 
     // Don't use shouldDeserialize here, since no one else should be using this port
-    this.serializedPortListener(message => {
+    this.serializedPortListener((message) => {
+      logger.debug("Store: Received message", { message })
       switch (message.type) {
         case STATE_TYPE:
-          this.replaceState(message.payload);
+          this.replaceState(message.payload)
 
           if (!this.readyResolved) {
-            this.readyResolved = true;
-            this.readyResolve();
+            this.readyResolved = true
+            this.readyResolve()
           }
-          break;
+          break
 
         case PATCH_STATE_TYPE:
-          this.patchState(message.payload);
-          break;
+          this.patchState(message.payload)
+          break
 
         default:
         // do nothing
       }
-    });
+    })
   }
 
   /**
-  * Returns a promise that resolves when the store is ready. Optionally a callback may be passed in instead.
-  * @param [function] callback An optional callback that may be passed in and will fire when the store is ready.
-  * @return {object} promise A promise that resolves when the store has established a connection with the background page.
-  */
+   * Returns a promise that resolves when the store is ready. Optionally a callback may be passed in instead.
+   * @param [function] callback An optional callback that may be passed in and will fire when the store is ready.
+   * @return {object} promise A promise that resolves when the store has established a connection with the background page.
+   */
   ready(cb = null) {
     if (cb !== null) {
-      return this.readyPromise.then(cb);
+      return this.readyPromise.then(cb)
     }
 
-    return this.readyPromise;
+    return this.readyPromise
   }
 
   /**
@@ -129,11 +145,11 @@ class Store {
    * @return {function}          An unsubscribe function which can be called to remove the listener from state updates
    */
   subscribe(listener) {
-    this.listeners.push(listener);
+    this.listeners.push(listener)
 
     return () => {
-      this.listeners = this.listeners.filter((l) => l !== listener);
-    };
+      this.listeners = this.listeners.filter((l) => l !== listener)
+    }
   }
 
   /**
@@ -141,8 +157,8 @@ class Store {
    * @param {object} state the new (partial) redux state
    */
   patchState(difference) {
-    this.state = this.patchStrategy(this.state, difference);
-    this.listeners.forEach((l) => l());
+    this.state = this.patchStrategy(this.state, difference)
+    this.listeners.forEach((l) => l())
   }
 
   /**
@@ -150,9 +166,9 @@ class Store {
    * @param  {object} state The new state for the store
    */
   replaceState(state) {
-    this.state = state;
+    this.state = state
 
-    this.listeners.forEach((l) => l());
+    this.listeners.forEach((l) => l())
   }
 
   /**
@@ -160,14 +176,14 @@ class Store {
    * @return {object} the current store state
    */
   getState() {
-    return this.state;
+    return this.state
   }
 
   /**
    * Stub function to stay consistent with Redux Store API. No-op.
    */
   replaceReducer() {
-    return;
+    return
   }
 
   /**
@@ -176,49 +192,61 @@ class Store {
    * @return {Promise}     Promise that will resolve/reject based on the action response from the background
    */
   dispatch(data) {
+    const msgId = Math.random() + "." + new Date().getTime()
+    logger.debug("dispatch!", { msgId, data })
+    const deadmanSwitch = setTimeout(() => {
+      logger.debug("deadmanSwitch on", { msgId, data })
+    }, 5000)
     return new Promise((resolve, reject) => {
       this.serializedMessageSender(
         this.extensionId,
         {
           type: DISPATCH_TYPE,
           portName: this.portName,
-          payload: data
-        }, null, (resp) => {
-          if (!resp) {
-            const error = this.browserAPI.runtime.lastError;
-            const bgErr = new Error(`${backgroundErrPrefix}${error}`);
+          payload: data,
+        },
+        null,
+        (resp) => {
+          logger.debug("deadmanSwitch off", { data, msgId, resp })
 
-            reject(assignIn(bgErr, error));
-            return;
+          clearTimeout(deadmanSwitch)
+          if (!resp) {
+            const error = this.browserAPI.runtime.lastError
+            const bgErr = new Error(`${backgroundErrPrefix}${error}`)
+            logger.error(
+              "Failed to receive a response from the background page. This is likely due to the background page not being available. Please ensure that the background page is running and that the extensionId is correct.",
+              error
+            )
+            reject(assignIn(bgErr, error))
+            return
           }
 
-          const { error, value } = resp;
+          const { error, value } = resp
 
           if (error) {
-            const bgErr = new Error(`${backgroundErrPrefix}${error}`);
+            const bgErr = new Error(`${backgroundErrPrefix}${error}`)
 
-            reject(assignIn(bgErr, error));
+            reject(assignIn(bgErr, error))
           } else {
-            resolve(value && value.payload);
+            resolve(value && value.payload)
           }
-        });
-    });
+        }
+      )
+    })
   }
 
   safetyHandler(message) {
-
-    if (message.action === 'storeReady' && message.portName === this.portName) {
-
+    if (message.action === "storeReady" && message.portName === this.portName) {
       // Remove Saftey Listener
-      this.browserAPI.runtime.onMessage.removeListener(this.safetyHandler);
+      this.browserAPI.runtime.onMessage.removeListener(this.safetyHandler)
 
       // Resolve if readyPromise has not been resolved.
       if (!this.readyResolved) {
-        this.readyResolved = true;
-        this.readyResolve();
+        this.readyResolved = true
+        this.readyResolve()
       }
     }
   }
 }
 
-export default Store;
+export default Store
