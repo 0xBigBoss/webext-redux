@@ -20,8 +20,7 @@ const defaultOpts = {
   extensionId: null,
   serializer: noop,
   deserializer: noop,
-  patchStrategy: shallowDiff,
-  maxReconnects: 10
+  patchStrategy: shallowDiff
 };
 
 class Store {
@@ -42,6 +41,8 @@ class Store {
     if (typeof patchStrategy !== 'function') {
       throw new Error('patchStrategy must be one of the included patching strategies or a custom patching function');
     }
+
+    this.id = `${Math.random()}.${new Date().getTime()}`;
 
     this.maxReconnects = maxReconnects;
     this.portName = portName;
@@ -73,23 +74,40 @@ class Store {
    * Connects and creates a port for handling messages between background and
    * this store. Automatically reconnects when port becomes disconnected.
    */
-  connect(deserializer, attempts = 0) {
-    if (attempts > this.maxReconnects) {
-      throw new Error("Too many connection attempts");
-    }
+  connect(deserializer) {
+
+    this.browserAPI.runtime.lastError; // clear this error if it exists
+
+    // console.log('Connecting to background page...', {id: this.id});
     // wake up service worker and then connect
     this.port = this.browserAPI.runtime.connect(this.extensionId, { name: this.portName });
 
+    // console.log('Connected to background page...', {id: this.id});
+
     this.port.onDisconnect.addListener(() => {
-      setTimeout(() => this.connect(deserializer, ++attempts), 0);
+      // console.log('Disconnected from background page...', {
+      //   lastError:  this.browserAPI.runtime.lastError,
+      //   id: this.id
+      // });
+
+      setTimeout(() => {
+        // eslint-disable-next-line no-unused-vars
+        this.browserAPI.runtime.sendMessage(this.extensionId, { type: 'ping' }, response => {
+          // console.log('Background page is alive, reconnecting...', {id: this.id});
+          this.connect(deserializer);
+        });
+      }, 1);
     });
 
     this.serializedPortListener = withDeserializer(deserializer)((...args) => {
+      // console.log('Binding serializedPortListener', {args, id: this.id});
       this.port.onMessage.addListener(...args);
+      // console.log('Bound serializedPortListener', {args, id: this.id});
     });
 
     // Don't use shouldDeserialize here, since no one else should be using this port
     this.serializedPortListener(message => {
+      // console.log('Received message from background page', {message, store: this });
       switch (message.type) {
         case STATE_TYPE:
           this.replaceState(message.payload);
@@ -184,6 +202,7 @@ class Store {
           portName: this.portName,
           payload: data
         }, null, (resp) => {
+          // console.log('Received response from background page after dispatch', {resp, id: this.id});
           if (!resp) {
             const error = this.browserAPI.runtime.lastError;
             const bgErr = new Error(`${backgroundErrPrefix}${error}`);
@@ -206,6 +225,8 @@ class Store {
   }
 
   safetyHandler(message) {
+
+    // console.log('Received safety message', {message, id: this.id});
 
     if (message.action === 'storeReady' && message.portName === this.portName) {
 
